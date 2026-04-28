@@ -6,13 +6,27 @@ require('dotenv').config();
 const { startScheduler } = require("./services/schedulerService");
 
 const app = express();
-const PORT = 4000;
+const PORT = 4001;
 
-// Middleware
-// app.use(cors({
-//   origin: ['http://localhost:5173', 'http://localhost:8080', 'http://localhost:3001', 'http://localhost:4000'],
-//   credentials: true
-// }));
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://invoice-for-rental-house-backend.onrender.com",
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

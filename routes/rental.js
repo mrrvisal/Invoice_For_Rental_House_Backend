@@ -3,12 +3,6 @@ const router = express.Router();
 const rental = require("../controllers/rentalController");
 const telegram = require("../controllers/telegramController");
 
-// routes/rental.js ឬ routes/telegram.js
-const { checkAndNotifyDueToday } = require('../services/schedulerService');
-router.post('/test/notify-due', async (req, res) => {
-  await checkAndNotifyDueToday();
-  res.json({ ok: true, message: 'ផ្ញើរួច' });
-});
 // routes/telegram.js ឬ routes/rental.js
 const { testNotifyNow } = require('../services/schedulerService');
 // router — test 10s auto send (ផ្ញើ 1 ដង បន្ទាប់ 10s)

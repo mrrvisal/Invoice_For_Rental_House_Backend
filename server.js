@@ -11,6 +11,7 @@ PORT = process.env.PORT || 4001;
 const allowedOrigins = [
   "http://localhost:5173",
   "https://invoice-for-rental-house-backend.onrender.com",
+  "https://invoice-for-rental-house.onrender.com/",
 ];
 
 app.use(

@@ -8,7 +8,17 @@ const {
 } = require("../utils/paymentUtils");
 require("dotenv").config();
 
-// Get enriched tenant data
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Build a visual progress bar  e.g.  ████░░░  5/8 ខែ */
+function progressBar(paid, total, size = 8) {
+  if (total === 0) return "░".repeat(size);
+  const filled = Math.round((paid / total) * size);
+  return "█".repeat(filled) + "░".repeat(size - filled);
+}
+
+// ─── Tenant data query ────────────────────────────────────────────────────────
+
 async function getTenantData(id) {
   const [rows] = await db.query(
     `
@@ -55,48 +65,111 @@ async function getTenantData(id) {
   };
 }
 
-// Build invoice message for one tenant
+// ─── Individual invoice ───────────────────────────────────────────────────────
+
 function buildInvoiceMessage(t) {
   const now = new Date();
   const currentMonthName = KH_MONTHS[now.getMonth()];
+  const bar = progressBar(t.monthsPaid, t.totalMonths);
 
+  // Payment breakdown section
   let breakdownLines = "";
-
   if (t.unpaidOverdue > 0 && t.unpaidCurrent > 0) {
-    breakdownLines = `
-❌ *ជំពាក់ (ខែចុងក្រោយ):* ${t.unpaidOverdue} ខែ × ${formatCurrency(t.price)} = *${formatCurrency(t.overdueAmt)}*
-🗓 *ខែ${currentMonthName}នេះ:* ${t.unpaidCurrent} ខែ × ${formatCurrency(t.price)} = *${formatCurrency(t.currentAmt)}*`;
+    breakdownLines =
+      `┃ ⏰ ខែជំពាក់ចាស់\n` +
+      `┃    ${t.unpaidOverdue} ខែ × ${formatCurrency(t.price)} = *${formatCurrency(t.overdueAmt)}*\n` +
+      `┃\n` +
+      `┃ 📆 ខែ${currentMonthName} (បច្ចុប្បន្ន)\n` +
+      `┃    ${t.unpaidCurrent} ខែ × ${formatCurrency(t.price)} = *${formatCurrency(t.currentAmt)}*`;
   } else if (t.unpaidCurrent > 0) {
-    breakdownLines = `
-🗓 *ខែ${currentMonthName}នេះ:* ${t.unpaidCurrent} ខែ × ${formatCurrency(t.price)} = *${formatCurrency(t.currentAmt)}*`;
+    breakdownLines =
+      `┃ 📆 ខែ${currentMonthName} (បច្ចុប្បន្ន)\n` +
+      `┃    ${t.unpaidCurrent} ខែ × ${formatCurrency(t.price)} = *${formatCurrency(t.currentAmt)}*`;
   } else {
-    breakdownLines = `\n✅ *បង់គ្រប់ហើយ*`;
+    breakdownLines = `┃ ✅ បានបង់គ្រប់ហើយ`;
   }
 
-  const totalLine =
+  const totalMonthsLabel =
     t.unpaidOverdue > 0 && t.unpaidCurrent > 0
-      ? `${t.unpaidOverdue} + ${t.unpaidCurrent} = *${t.unpaidTotal} ខែ = ${formatCurrency(t.totalDue)}*`
-      : `*${t.unpaidTotal} ខែ = ${formatCurrency(t.totalDue)}*`;
+      ? `${t.unpaidOverdue} + ${t.unpaidCurrent} = ${t.unpaidTotal} ខែ`
+      : `${t.unpaidTotal} ខែ`;
 
   return `
 🏠 *វិក្កយបត្រជួលបន្ទប់*
-━━━━━━━━━━━━━━━━━
-👤 *អ្នកជួល:* ${t.tenant_name}
-📱 *ទូរស័ព្ទ:* ${t.phone}
-🚪 *បន្ទប់:* ${t.room_number}
-📅 *ថ្ងៃចូលស្នាក់:* ${formatDateKH(t.checkin_date)}
-📆 *ថ្ងៃត្រូវបង់:* រៀងរាល់ ថ្ងៃ ${t.dueDay} នៃខែ
-━━━━━━━━━━━━━━━━━
-💰 *តម្លៃ/ខែ:* ${formatCurrency(t.price)}
-✅ *បានបង់រួចហើយ:* ${t.monthsPaid} ខែ
-━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━
+
+👤 ${t.tenant_name}
+🚪 បន្ទប់លេខ *${t.room_number}*  ·  📱 ${t.phone}
+📅 ចូលស្នាក់: ${formatDateKH(t.checkin_date)}
+📆 ថ្ងៃបង់: រៀងរាល់ *ថ្ងៃ ${t.dueDay}* នៃខែ
+
+━━━━━━━━━━━━━━━━━━━
+💳 *ការបង់ប្រាក់*
+
+💰 តម្លៃ/ខែ: *${formatCurrency(t.price)}*
+${bar}  ${t.monthsPaid}/${t.totalMonths} ខែ
+
+━━━━━━━━━━━━━━━━━━━
+📊 *សេចក្តីលម្អិត*
+
 ${breakdownLines}
-━━━━━━━━━━━━━━━━━
-💵 *សរុបត្រូវបង់:* ${totalLine}
-━━━━━━━━━━━━━━━━━
-⚠️ _សូមមេត្តាបង់ប្រាក់ឱ្យបានទាន់ខែ_
+
+━━━━━━━━━━━━━━━━━━━
+💵 *សរុបត្រូវបង់*
+┗▶ ${totalMonthsLabel} = *${formatCurrency(t.totalDue)}*
+━━━━━━━━━━━━━━━━━━━
+_⚠️ សូមមេត្តាបង់ប្រាក់ឱ្យបានទាន់ពេលវេលា_
+_🙏 អរគុណសម្រាប់ការជឿទុកចិត្ត_
 `.trim();
 }
+
+// ─── Summary report ───────────────────────────────────────────────────────────
+
+function buildSummaryMessage(tenants, today) {
+  const now = new Date();
+  const currentMonthName = KH_MONTHS[now.getMonth()];
+  const grandTotal = tenants.reduce((s, t) => s + t.totalDue, 0);
+
+  const lines = tenants
+    .map((t, i) => {
+      const num = String(i + 1).padStart(2, "0");
+      let detail = "";
+      if (t.unpaidOverdue > 0 && t.unpaidCurrent > 0) {
+        detail = `ចាស់ ${t.unpaidOverdue}ខែ + ខែ${currentMonthName} 1ខែ`;
+      } else if (t.unpaidOverdue > 0) {
+        detail = `ជំពាក់ ${t.unpaidOverdue} ខែ`;
+      } else {
+        detail = `ខែ${currentMonthName} ${t.unpaidCurrent} ខែ`;
+      }
+
+      return (
+        `${num}\\. 🚪 *បន្ទប់ ${t.room_number}* — ${t.tenant_name}\n` +
+        `      📱 ${t.phone}\n` +
+        `      💰 ${formatCurrency(t.price)}/ខែ  ·  ${detail}\n` +
+        `      ⟹  *${formatCurrency(t.totalDue)}*`
+      );
+    })
+    .join("\n\n");
+
+  return `
+📋 *របាយការណ៍ប្រាក់ជំពាក់*
+━━━━━━━━━━━━━━━━━━━
+🗓 ថ្ងៃទី: *${today}*
+🏠 អ្នកជំពាក់: *${tenants.length} នាក់*
+━━━━━━━━━━━━━━━━━━━
+
+${lines}
+
+━━━━━━━━━━━━━━━━━━━
+📦 *សរុប*
+┣ អ្នកជំពាក់:  *${tenants.length} នាក់*
+┗ ទឹកប្រាក់:  *${formatCurrency(grandTotal)}*
+━━━━━━━━━━━━━━━━━━━
+_📅 បានបង្កើតដោយស្វ័យប្រវត្តិ · ${today}_
+`.trim();
+}
+
+// ─── Route handlers ───────────────────────────────────────────────────────────
 
 // POST /api/rentals/telegram/invoice/:id
 exports.sendInvoice = async (req, res) => {
@@ -148,11 +221,10 @@ exports.sendInvoice = async (req, res) => {
 };
 
 // POST /api/rentals/telegram/send-all
-// FIX: chat_id is now only read from env — callers cannot redirect invoices to another chat
 exports.sendAllUnpaidInvoices = async (req, res) => {
   try {
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-    const CHAT_ID = process.env.TELEGRAM_CHAT_ID; // ✅ env only — not req.body
+    const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
     if (!BOT_TOKEN || !CHAT_ID) {
       return res.status(400).json({
@@ -169,9 +241,6 @@ exports.sendAllUnpaidInvoices = async (req, res) => {
       GROUP BY r.id
       ORDER BY r.room_number ASC
     `);
-
-    const now = new Date();
-    const currentMonthName = KH_MONTHS[now.getMonth()];
 
     const tenants = rows
       .map((t) => {
@@ -208,32 +277,8 @@ exports.sendAllUnpaidInvoices = async (req, res) => {
       });
     }
 
-    const grandTotal = tenants.reduce((s, t) => s + t.totalDue, 0);
     const today = formatDateKH(new Date().toISOString());
-
-    const lines = tenants
-      .map((t, i) => {
-        let detail = "";
-        if (t.unpaidOverdue > 0 && t.unpaidCurrent > 0) {
-          detail = `ជំពាក់ ${t.unpaidOverdue}ខែ + ខែ${currentMonthName} 1ខែ = ${t.unpaidTotal}ខែ`;
-        } else {
-          detail = `ខែ${currentMonthName} ${t.unpaidTotal}ខែ`;
-        }
-        return `${i + 1}. 🚪 *${t.room_number}* — ${t.tenant_name}\n   📱 ${t.phone}\n   💰 ${formatCurrency(t.price)}/ខែ | ${detail}\n   ⟹ *${formatCurrency(t.totalDue)}*`;
-      })
-      .join("\n\n");
-
-    const summaryMessage = `
-📋 *របាយការណ៍ប្រាក់ជំពាក់*
-📅 *ថ្ងៃទី:* ${today}
-━━━━━━━━━━━━━━━━━
-
-${lines}
-
-━━━━━━━━━━━━━━━━━
-🏠 *អ្នកជំពាក់សរុប:* ${tenants.length} នាក់
-💰 *ទឹកប្រាក់ជំពាក់សរុប:* *${formatCurrency(grandTotal)}*
-    `.trim();
+    const summaryMessage = buildSummaryMessage(tenants, today);
 
     await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       chat_id: CHAT_ID,

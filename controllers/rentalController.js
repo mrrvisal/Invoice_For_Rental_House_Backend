@@ -1,62 +1,18 @@
 const db = require("../config/database");
+const { calculatePaymentStatus } = require("../utils/paymentUtils");
 
-/**
- * Calculate payment status based on checkin date
- * - Due day = same day as checkin (e.g. checkin on 5th → due every 5th)
- * - overdueMonths = full months already past due date (not counting current month)
- * - currentMonthDue = always 1 (the ongoing month)
- * - totalMonths = overdueMonths + 1
- */
-// ===== TEST MODE =====
+// ===== TEST MODE (non-production only) =====
 let testOffsetMonths = 0;
+
 exports.setTestOffset = (req, res) => {
   testOffsetMonths = parseInt(req.body.months) || 0;
   res.json({ ok: true, offsetMonths: testOffsetMonths });
 };
-// =====================
 
-function calculatePaymentStatus(checkinDate) {
-  const checkin = new Date(checkinDate);
-  let now = new Date();
-  now.setMonth(now.getMonth() + testOffsetMonths);
-  const dueDay = checkin.getDate();
-
-  // Next due date this month or next
-  let nextDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
-  if (nextDue <= now) {
-    nextDue = new Date(now.getFullYear(), now.getMonth() + 1, dueDay);
-  }
-
-  // Last due date (most recent past due)
-  let lastDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
-  if (lastDue > now) {
-    lastDue = new Date(now.getFullYear(), now.getMonth() - 1, dueDay);
-  }
-
-  // Count full overdue months (elapsed months since checkin, excluding current)
-  let overdueMonths = 0;
-  const cursor = new Date(checkin.getFullYear(), checkin.getMonth(), dueDay);
-  cursor.setMonth(cursor.getMonth() + 1); // first due date after checkin
-
-  while (cursor <= lastDue) {
-    overdueMonths++;
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-
-  return {
-    overdueMonths, // e.g. 3 — months past due (not counting current)
-    currentMonthDue: 1, // always 1 — the current ongoing month
-    totalMonths: overdueMonths + 1,
-    nextDueDate: nextDue.toISOString().split("T")[0],
-    dueDay,
-  };
+function getOffset() {
+  return process.env.NODE_ENV === "production" ? 0 : testOffsetMonths;
 }
-
-function formatDateKH(dateStr) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  return `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getFullYear()}`;
-}
+// ============================================
 
 // GET all records
 exports.getAllRecords = async (req, res) => {
@@ -78,7 +34,7 @@ exports.getAllRecords = async (req, res) => {
         totalMonths,
         nextDueDate,
         dueDay,
-      } = calculatePaymentStatus(row.checkin_date);
+      } = calculatePaymentStatus(row.checkin_date, getOffset());
       const monthsPaid = parseInt(row.total_months_paid) || 0;
       const unpaidMonths = Math.max(0, totalMonths - monthsPaid);
       const unpaidOverdue = Math.max(
@@ -134,7 +90,7 @@ exports.getRecord = async (req, res) => {
 
     const row = rows[0];
     const { overdueMonths, currentMonthDue, totalMonths, nextDueDate, dueDay } =
-      calculatePaymentStatus(row.checkin_date);
+      calculatePaymentStatus(row.checkin_date, getOffset());
     const monthsPaid = parseInt(row.total_months_paid) || 0;
     const unpaidMonths = Math.max(0, totalMonths - monthsPaid);
 
@@ -174,33 +130,52 @@ exports.createRecord = async (req, res) => {
         .json({ success: false, message: "សូមបំពេញព័ត៌មានទាំងអស់" });
     }
 
+    // Sanitize string inputs
+    const sanitized = {
+      tenant_name: String(tenant_name).trim().slice(0, 255),
+      phone: String(phone).trim().slice(0, 50),
+      room_number: String(room_number).trim().slice(0, 50),
+      room_price: parseFloat(room_price),
+      checkin_date: String(checkin_date).trim(),
+      notes: notes ? String(notes).trim().slice(0, 1000) : null,
+    };
+
+    if (isNaN(sanitized.room_price) || sanitized.room_price <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "តម្លៃបន្ទប់មិនត្រឹមត្រូវ" });
+    }
+
     // Check duplicate room
     const [existing] = await db.query(
       "SELECT id FROM rental_records WHERE room_number = ?",
-      [room_number],
+      [sanitized.room_number],
     );
     if (existing.length) {
       return res.status(400).json({
         success: false,
-        message: `បន្ទប់លេខ ${room_number} មានអ្នកជួលរួចហើយ`,
+        message: `បន្ទប់លេខ ${sanitized.room_number} មានអ្នកជួលរួចហើយ`,
       });
     }
 
-    const { totalMonths } = calculatePaymentStatus(checkin_date);
-    const totalDue = totalMonths * parseFloat(room_price);
+    const { totalMonths } = calculatePaymentStatus(
+      sanitized.checkin_date,
+      getOffset(),
+    );
+    const totalDue = totalMonths * sanitized.room_price;
 
     const [result] = await db.query(
       `INSERT INTO rental_records (tenant_name, phone, room_number, room_price, checkin_date, months_count, total_due, status, notes)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)`,
       [
-        tenant_name,
-        phone,
-        room_number,
-        room_price,
-        checkin_date,
+        sanitized.tenant_name,
+        sanitized.phone,
+        sanitized.room_number,
+        sanitized.room_price,
+        sanitized.checkin_date,
         totalMonths,
         totalDue,
-        notes || null,
+        sanitized.notes,
       ],
     );
 
@@ -230,32 +205,45 @@ exports.updateRecord = async (req, res) => {
         .status(404)
         .json({ success: false, message: "រកមិនឃើញទិន្នន័យ" });
 
+    // Sanitize string inputs
+    const sanitized = {
+      tenant_name: String(tenant_name).trim().slice(0, 255),
+      phone: String(phone).trim().slice(0, 50),
+      room_number: String(room_number).trim().slice(0, 50),
+      room_price: parseFloat(room_price),
+      checkin_date: String(checkin_date).trim(),
+      notes: notes ? String(notes).trim().slice(0, 1000) : null,
+    };
+
     // Check duplicate room (exclude self)
     const [dup] = await db.query(
       "SELECT id FROM rental_records WHERE room_number = ? AND id != ?",
-      [room_number, id],
+      [sanitized.room_number, id],
     );
     if (dup.length) {
       return res.status(400).json({
         success: false,
-        message: `បន្ទប់លេខ ${room_number} មានអ្នកជួលផ្សេងរួចហើយ`,
+        message: `បន្ទប់លេខ ${sanitized.room_number} មានអ្នកជួលផ្សេងរួចហើយ`,
       });
     }
 
-    const { totalMonths } = calculatePaymentStatus(checkin_date);
+    const { totalMonths } = calculatePaymentStatus(
+      sanitized.checkin_date,
+      getOffset(),
+    );
 
     await db.query(
       `UPDATE rental_records
        SET tenant_name=?, phone=?, room_number=?, room_price=?, checkin_date=?, months_count=?, notes=?, updated_at=NOW()
        WHERE id=?`,
       [
-        tenant_name,
-        phone,
-        room_number,
-        room_price,
-        checkin_date,
+        sanitized.tenant_name,
+        sanitized.phone,
+        sanitized.room_number,
+        sanitized.room_price,
+        sanitized.checkin_date,
         totalMonths,
-        notes || null,
+        sanitized.notes,
         id,
       ],
     );
@@ -291,7 +279,7 @@ exports.updateStatus = async (req, res) => {
 
     const row = rows[0];
     const { overdueMonths, currentMonthDue, totalMonths } =
-      calculatePaymentStatus(row.checkin_date);
+      calculatePaymentStatus(row.checkin_date, getOffset());
     const monthsPaid = parseInt(row.total_months_paid) || 0;
     const unpaidMonths = Math.max(0, totalMonths - monthsPaid);
 
@@ -321,7 +309,11 @@ exports.updateStatus = async (req, res) => {
 
     res.json({
       success: true,
-      message: `បានបញ្ចូលការបង់ប្រាក់ ${paying} ខែ ($${amountPaid.toLocaleString()})${remainingAfter > 0 ? ` — នៅជំពាក់ ${remainingAfter} ខែទៀត` : " — បង់គ្រប់ហើយ"}`,
+      message: `បានបញ្ចូលការបង់ប្រាក់ ${paying} ខែ ($${amountPaid.toLocaleString()})${
+        remainingAfter > 0
+          ? ` — នៅជំពាក់ ${remainingAfter} ខែទៀត`
+          : " — បង់គ្រប់ហើយ"
+      }`,
       months_paid: paying,
       amount_paid: amountPaid,
       remaining_months: remainingAfter,

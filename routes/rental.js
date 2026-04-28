@@ -3,19 +3,22 @@ const router = express.Router();
 const rental = require("../controllers/rentalController");
 const telegram = require("../controllers/telegramController");
 
-// routes/telegram.js ឬ routes/rental.js
-const { testNotifyNow } = require('../services/schedulerService');
-// router — test 10s auto send (ផ្ញើ 1 ដង បន្ទាប់ 10s)
-router.post('/test/notify-10s', async (req, res) => {
-  res.json({ ok: true, message: 'នឹងផ្ញើក្នុង 10 វិនាទី...' });
-  setTimeout(async () => {
-    await testNotifyNow();
-  }, 1000); // 10s
-});
+// ===== TEST ROUTES — non-production only =====
+// These are disabled in production to prevent abuse
+if (process.env.NODE_ENV !== "production") {
+  const { testNotifyNow } = require("../services/schedulerService");
+  const { setTestOffset } = require("../controllers/rentalController");
 
-// routes/rental.js
-const { setTestOffset } = require('../controllers/rentalController');
-router.post('/test/set-offset', setTestOffset);
+  router.post("/test/set-offset", setTestOffset);
+
+  router.post("/test/notify-10s", async (req, res) => {
+    res.json({ ok: true, message: "នឹងផ្ញើក្នុង 10 វិនាទី..." });
+    setTimeout(async () => {
+      await testNotifyNow();
+    }, 10000);
+  });
+}
+// =============================================
 
 // Rental CRUD
 router.get("/records", rental.getAllRecords);

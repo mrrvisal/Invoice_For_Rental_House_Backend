@@ -1,28 +1,15 @@
 const cron = require("node-cron");
 const db = require("../config/database");
 const axios = require("axios");
-require("dotenv").config();
-
-// reuse ពី telegramController
+const {
+  calculatePaymentStatus,
+  formatDateKH,
+} = require("../utils/paymentUtils");
 const {
   getTenantData,
   buildInvoiceMessage,
 } = require("../controllers/telegramController");
-
-const khMonths = [
-  "មករា",
-  "កុម្ភៈ",
-  "មីនា",
-  "មេសា",
-  "ឧសភា",
-  "មិថុនា",
-  "កក្កដា",
-  "សីហា",
-  "កញ្ញា",
-  "តុលា",
-  "វិច្ឆិកា",
-  "ធ្នូ",
-];
+require("dotenv").config();
 
 async function sendToTelegram(text) {
   const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -34,21 +21,32 @@ async function sendToTelegram(text) {
   });
 }
 
-// ផ្ញើ invoice detail ម្នាក់ម្តង — ដូច sendInvoice
+// Alert owner on scheduler error
+async function sendErrorAlert(context, message) {
+  try {
+    await sendToTelegram(
+      `⚠️ *[Scheduler Error]*\n📌 ${context}\n❌ ${message}`,
+    );
+  } catch (e) {
+    console.error("[Scheduler] Failed to send error alert:", e.message);
+  }
+}
+
+// Send invoice for one tenant
 async function sendInvoiceForTenant(row) {
   const t = await getTenantData(row.id);
-  if (!t || t.unpaidTotal === 0) return; // skip បើបានបង់ហើយ
+  if (!t || t.unpaidTotal === 0) return;
   const msg = buildInvoiceMessage(t);
   await sendToTelegram(msg);
 }
 
-// ====== AUTO SCHEDULER — due date ថ្ងៃនេះ ======
+// ====== AUTO SCHEDULER — due date today ======
 async function checkAndNotifyDueToday() {
   try {
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
     const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
     if (!BOT_TOKEN || !CHAT_ID) {
-      console.error("[Scheduler] Token missing");
+      console.error("[Scheduler] Token/Chat ID missing");
       return;
     }
 
@@ -62,7 +60,7 @@ async function checkAndNotifyDueToday() {
       GROUP BY r.id
     `);
 
-    // filter: due_day = ថ្ងៃនេះ AND ក្រោយ checkin
+    // Filter: due_day = today AND past checkin date
     const dueTenants = rows.filter((row) => {
       const checkin = new Date(row.checkin_date);
       const dueDay = checkin.getDate();
@@ -75,27 +73,45 @@ async function checkAndNotifyDueToday() {
       return;
     }
 
-    // ផ្ញើ invoice detail ម្នាក់ម្តង — loop
+    let sentCount = 0;
+    let failedCount = 0;
+
     for (const row of dueTenants) {
       try {
         await sendInvoiceForTenant(row);
+        sentCount++;
         console.log(
           `[Scheduler] ✓ ផ្ញើ: ${row.tenant_name} (បន្ទប់ ${row.room_number})`,
         );
-        // delay 500ms រវាង message ដើម្បីជៀសវាង Telegram rate limit
+        // Delay between messages to avoid Telegram rate limit
         await new Promise((r) => setTimeout(r, 500));
       } catch (e) {
+        failedCount++;
         console.error(`[Scheduler] ✗ ${row.tenant_name}:`, e.message);
       }
     }
 
-    console.log(`[Scheduler] ✓ សរុប ${dueTenants.length} នាក់`);
+    console.log(
+      `[Scheduler] ✓ សរុប ${sentCount} នាក់${failedCount > 0 ? ` (ខកខាន ${failedCount} នាក់)` : ""}`,
+    );
+
+    // Alert if any failed
+    if (failedCount > 0) {
+      await sendErrorAlert(
+        "checkAndNotifyDueToday",
+        `ផ្ញើបានតែ ${sentCount}/${dueTenants.length} នាក់`,
+      );
+    }
   } catch (err) {
     console.error("[Scheduler] Error:", err.response?.data || err.message);
+    await sendErrorAlert(
+      "checkAndNotifyDueToday",
+      err.response?.data?.description || err.message,
+    );
   }
 }
 
-// ====== TEST — ផ្ញើ tenant ជាក់លាក់ ======
+// ====== TEST — send invoice for specific or first 3 tenants ======
 async function testNotifyNow(tenantId = null) {
   try {
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -129,7 +145,6 @@ async function testNotifyNow(tenantId = null) {
       const t = await getTenantData(row.id);
       if (!t) continue;
 
-      // test mode: បន្ថែម [TEST] header
       const originalMsg = buildInvoiceMessage(t);
       const testMsg = `🧪 *[TEST MODE]*\n⚠️ _នេះជា test — មិនមែន due date ពិតទេ_\n━━━━━━━━━━━━━━━━━\n${originalMsg}`;
 

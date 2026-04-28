@@ -1,49 +1,12 @@
 const axios = require("axios");
 const db = require("../config/database");
+const {
+  calculatePaymentStatus,
+  formatDateKH,
+  formatCurrency,
+  KH_MONTHS,
+} = require("../utils/paymentUtils");
 require("dotenv").config();
-
-function calculatePaymentStatus(checkinDate) {
-  const checkin = new Date(checkinDate);
-  const now = new Date();
-  const dueDay = checkin.getDate();
-
-  let nextDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
-  if (nextDue <= now) {
-    nextDue = new Date(now.getFullYear(), now.getMonth() + 1, dueDay);
-  }
-
-  let lastDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
-  if (lastDue > now) {
-    lastDue = new Date(now.getFullYear(), now.getMonth() - 1, dueDay);
-  }
-
-  let overdueMonths = 0;
-  const cursor = new Date(checkin.getFullYear(), checkin.getMonth(), dueDay);
-  cursor.setMonth(cursor.getMonth() + 1);
-
-  while (cursor <= lastDue) {
-    overdueMonths++;
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-
-  return {
-    overdueMonths,
-    currentMonthDue: 1,
-    totalMonths: overdueMonths + 1,
-    nextDueDate: nextDue.toISOString().split("T")[0],
-    dueDay,
-  };
-}
-
-function formatDate(dateStr) {
-  if (!dateStr) return "N/A";
-  const d = new Date(dateStr);
-  return `${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getFullYear()}`;
-}
-
-function formatCurrency(amount) {
-  return `$${parseFloat(amount).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
-}
 
 // Get enriched tenant data
 async function getTenantData(id) {
@@ -95,21 +58,7 @@ async function getTenantData(id) {
 // Build invoice message for one tenant
 function buildInvoiceMessage(t) {
   const now = new Date();
-  const khMonths = [
-    "មករា",
-    "កុម្ភៈ",
-    "មីនា",
-    "មេសា",
-    "ឧសភា",
-    "មិថុនា",
-    "កក្កដា",
-    "សីហា",
-    "កញ្ញា",
-    "តុលា",
-    "វិច្ឆិកា",
-    "ធ្នូ",
-  ];
-  const currentMonthName = khMonths[now.getMonth()];
+  const currentMonthName = KH_MONTHS[now.getMonth()];
 
   let breakdownLines = "";
 
@@ -135,7 +84,7 @@ function buildInvoiceMessage(t) {
 👤 *អ្នកជួល:* ${t.tenant_name}
 📱 *ទូរស័ព្ទ:* ${t.phone}
 🚪 *បន្ទប់:* ${t.room_number}
-📅 *ថ្ងៃចូលស្នាក់:* ${formatDate(t.checkin_date)}
+📅 *ថ្ងៃចូលស្នាក់:* ${formatDateKH(t.checkin_date)}
 📆 *ថ្ងៃត្រូវបង់:* រៀងរាល់ ថ្ងៃ ${t.dueDay} នៃខែ
 ━━━━━━━━━━━━━━━━━
 💰 *តម្លៃ/ខែ:* ${formatCurrency(t.price)}
@@ -149,7 +98,7 @@ ${breakdownLines}
 `.trim();
 }
 
-// POST /api/telegram/invoice/:id
+// POST /api/rentals/telegram/invoice/:id
 exports.sendInvoice = async (req, res) => {
   try {
     const { id } = req.params;
@@ -157,12 +106,10 @@ exports.sendInvoice = async (req, res) => {
     const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
     if (!BOT_TOKEN || !CHAT_ID) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Telegram Bot Token ឬ Chat ID មិនបានដំឡើង",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Telegram Bot Token ឬ Chat ID មិនបានដំឡើង",
+      });
     }
 
     const t = await getTenantData(id);
@@ -200,19 +147,18 @@ exports.sendInvoice = async (req, res) => {
   }
 };
 
-// POST /api/telegram/send-all
+// POST /api/rentals/telegram/send-all
+// FIX: chat_id is now only read from env — callers cannot redirect invoices to another chat
 exports.sendAllUnpaidInvoices = async (req, res) => {
   try {
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-    const CHAT_ID = req.body.chat_id || process.env.TELEGRAM_CHAT_ID;
+    const CHAT_ID = process.env.TELEGRAM_CHAT_ID; // ✅ env only — not req.body
 
     if (!BOT_TOKEN || !CHAT_ID) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "Telegram Bot Token ឬ Chat ID មិនបានដំឡើង",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "Telegram Bot Token ឬ Chat ID មិនបានដំឡើង",
+      });
     }
 
     const [rows] = await db.query(`
@@ -225,21 +171,7 @@ exports.sendAllUnpaidInvoices = async (req, res) => {
     `);
 
     const now = new Date();
-    const khMonths = [
-      "មករា",
-      "កុម្ភៈ",
-      "មីនា",
-      "មេសា",
-      "ឧសភា",
-      "មិថុនា",
-      "កក្កដា",
-      "សីហា",
-      "កញ្ញា",
-      "តុលា",
-      "វិច្ឆិកា",
-      "ធ្នូ",
-    ];
-    const currentMonthName = khMonths[now.getMonth()];
+    const currentMonthName = KH_MONTHS[now.getMonth()];
 
     const tenants = rows
       .map((t) => {
@@ -277,9 +209,8 @@ exports.sendAllUnpaidInvoices = async (req, res) => {
     }
 
     const grandTotal = tenants.reduce((s, t) => s + t.totalDue, 0);
-    const today = formatDate(new Date().toISOString());
+    const today = formatDateKH(new Date().toISOString());
 
-    // Build summary list
     const lines = tenants
       .map((t, i) => {
         let detail = "";
@@ -325,6 +256,5 @@ ${lines}
   }
 };
 
-// ខាងចុង telegramController.js
-module.exports.getTenantData       = getTenantData;
+module.exports.getTenantData = getTenantData;
 module.exports.buildInvoiceMessage = buildInvoiceMessage;

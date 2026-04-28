@@ -6,7 +6,7 @@ require('dotenv').config();
 const { startScheduler } = require("./services/schedulerService");
 
 const app = express();
-const PORT = 4001;
+PORT = process.env.PORT || 4001;
 
 const allowedOrigins = [
   "http://localhost:5173",

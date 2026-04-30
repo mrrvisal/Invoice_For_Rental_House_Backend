@@ -1,9 +1,12 @@
-const express = require('express');
-const cors = require('cors');
-const cron = require('node-cron');
-const axios = require('axios');
-require('dotenv').config();
+const express = require("express");
+const cors = require("cors");
+const cron = require("node-cron");
+const axios = require("axios");
+const bcrypt = require("bcrypt");
+const crypto = require("crypto");
+require("dotenv").config();
 const { startScheduler } = require("./services/schedulerService");
+const authMiddleware = require("./middleware/auth"); // ✅ Auth middleware
 
 const app = express();
 PORT = process.env.PORT || 4001;
@@ -31,32 +34,23 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
-app.use('/api/rentals', require('./routes/rental'));
+// ✅ Auth routes (public — no middleware)
+app.use("/api/auth", require("./routes/auth"));
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Server is running', timestamp: new Date() });
+// ✅ Rental routes — protected by JWT
+app.use("/api/rentals", authMiddleware, require("./routes/rental"));
+
+// Health check (public)
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "Server is running",
+    timestamp: new Date(),
+  });
 });
-
-// Auto-send daily unpaid report at 8AM (optional cron)
-// Uncomment to enable automatic daily Telegram notifications
-/*
-cron.schedule('0 8 * * *', async () => {
-  console.log('Running daily unpaid report...');
-  try {
-    const db = require('./config/database');
-    // Add auto-send logic here if needed
-  } catch (err) {
-    console.error('Cron error:', err);
-  }
-}, { timezone: 'Asia/Phnom_Penh' });
-*/
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📋 API: http://localhost:${PORT}/api/rentals`);
-    startScheduler(); // ✅ ចាប់ cron
 });
 
 module.exports = app;
